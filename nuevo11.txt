@@ -1,0 +1,2183 @@
+BUG-1229278-OMN-Error en Pago de Tarjeta de Crédito PU
+
+me ayudas con el siguiente analisis y dar solucion al siguiente bug
+1. Se valida correctamente la papeleta
+2. Genera error al procesar, te voy a compartir el SP que se encarga de validar y procesar para que lo analice la llamada al sp y los que se consumen
+
+sqlcall: cob_ahorros..sp_pago_p_unica_local @t_trn=26054,@i_trn=2744,@i_mon=0,@i_efe=23.0,@i_loc=0.0,@i_prop=0.0,@i_num_papeleta=603,@i_nombre='CARMEN EVELIA SANTOS URRIOLA DE URRIOLA',@i_cuenta_ti='',@i_tipo_ti='1',@i_idcierre=0,@i_sld_caja=0,@i_nombre_ocx='PAPELETAUNICA',@o_sldcaja=0,@o_idcierre=0,@o_ssn_host=,@o_ruc_filial='00',@o_direc_filial='00',@o_nombre_filial='00',@o_ssn='',@o_fini='',@o_term='',@o_ofi_nombre='',@o_ofi_ciudad='',@o_formulario='0',@o_monto_formulario=0,@t_ejec='R',@i_tsn=256,@i_codcaja=300,@i_idcaja=252,@t_filial=1,@t_online='S',@t_nemonico='2744',@s_error=0,@s_msg='JCH EFE ',@r_sldcaja=543778.1700,@r_idcierre=1,@r_ssn_host=7184072,@r_slddisp=,@r_ruc_filial='2-220-270 D.V',@r_direc_filial='CALLE JORGE ZARAK, ENTRE VÍA ESPAÑA Y AVE. FERNÁNDEZ DE CÓRDOBA',@r_nombre_filial='COOPERATIVA PROFESIONALES R.L.',@r_ssn=7184072,@r_fini='',@r_term='192.168.84',@r_ofi_nombre='',@r_ofi_ciudad='',@s_srv='CTSDESASRV',@s_user='admuser',@s_term='192.168.84',@s_ofi=10,@s_rol=215,@s_ssn_branch=7184071,@s_ssn=7184072,@s_lsrv='CTSDESASRV',@s_date='08/25/2025',@s_sesn=15169,@s_org='L'
+
+sp
+
+/******************************************************************/
+/*    NOMBRE LOGICO:      sp_pago_p_unica_local                   */
+/*    PRODUCTO:           Teller Web                              */
+/*    Disenado por:       Juan Cadavid                            */
+/*    Fecha de escritura: 07-Jul-2021                             */
+/******************************************************************/
+/*                     IMPORTANTE                                 */
+/*   Esta aplicacion es parte de los  paquetes bancarios          */
+/*   propiedad de MACOSA S.A.                                     */
+/*   Su uso no autorizado queda  expresamente  prohibido          */
+/*   asi como cualquier alteracion o agregado hecho  por          */
+/*   alguno de sus usuarios sin el debido consentimiento          */
+/*   por escrito de MACOSA.                                       */
+/*   Este programa esta protegido por la ley de derechos          */
+/*   de autor y por las convenciones  internacionales de          */
+/*   propiedad intelectual.  Su uso  no  autorizado dara          */
+/*   derecho a MACOSA para obtener ordenes  de secuestro          */
+/*   o  retencion  y  para  perseguir  penalmente a  los          */
+/*   autores de cualquier infraccion.                             */
+/******************************************************************/
+/*                           PROPOSITO                            */
+/* Este SP realiza la transaccion de deposito, NC de ahorro sin   */
+/* libreta y deposito de companias                                */
+/******************************************************************/
+/*                        MODIFICACIONES                          */
+/*  FECHA              AUTOR              RAZON                   */
+/*  07/Jul/2023        J.Cadavid   Pago Papeleta Unica Local      */
+/******************************************************************/
+use cob_ahorros
+go
+if exists (select * from sysobjects where name = 'sp_pago_p_unica_local')
+  drop proc sp_pago_p_unica_local
+go
+create Procedure sp_pago_p_unica_local(
+  @s_ssn_branch         int,
+  @s_srv                varchar(30),
+  @s_lsrv	            varchar(30),
+  @s_user               varchar(30),
+  @s_term               varchar(32),
+  @s_ssn	            int,
+  @s_sesn               int = null,
+  @s_date               datetime,
+  @s_ofi                smallint        = 1,
+  @s_rol                smallint        = 1,
+  @s_org_err	        char(1)         = null,
+  @s_error              int             = null,
+  @s_sev                tinyint         = null,
+  @s_msg                varchar(64)     = null,
+  @s_org                char(1),        
+  @t_show_version       bit             = 0,
+  @t_file               varchar(14)     = null,
+  @t_from               varchar(32)     = null,
+  @t_ejec               char(1)         = 'R',
+  @t_corr               char(1)         = 'N',
+  @t_ssn_corr           int = null,     
+  @t_rty                char(1)         = 'N',
+  @t_trn                int,
+  @t_filial             smallint        = 1,
+  @t_aut                char(1)         = 'N',
+  @t_tsn_aut            int = null,     
+  @t_login_aut          varchar(32)     = null,
+  @t_online             char(1)         = 'S',
+  @t_nemonico           varchar(10)     = null,
+  @r_sldcaja            money           = 0,
+  @r_idcierre           tinyint         = 0,
+  @r_ssn_host           int             = null,
+  @r_slddisp            money           = null,
+  @r_formulario         char(1)         = null,
+  @r_monto_formulario   money           = null,
+  @r_ruc_filial         varchar(13)     = null, 
+  @r_direc_filial       descripcion     = null, 
+  @r_nombre_filial      varchar(54)     = null,
+  @r_ssn                int             = null,
+  @r_fini               varchar(10)     = null,
+  @r_term               varchar(32)     = null,
+  @r_ofi_nombre         varchar(32)     = null,
+  @r_ofi_ciudad         varchar(32)     = null,
+  @i_login_aut_reverso  varchar(30)     = null,
+  @i_motivo_reverso     catalogo        = null,
+  @i_obs_reverso        varchar(30)     = null,
+  @i_idcierre           int             = null,
+  @i_sld_caja           money           = null,
+  @i_tsn                int             = -1,  
+  @i_idcaja             int,
+  @i_nombre_ocx         varchar(20),
+  @i_trn                int,
+  --Datos papeleta unica
+  @i_efe                money = null,
+  @i_loc				 money = null, 
+  @i_prop				 money = null,
+  @i_mon                tinyint = null,
+  @i_num_papeleta     	 int     = null, 
+  @i_nombre             varchar(64)     = null,  
+  @i_tipo_ti            varchar(3)    = null,
+  @i_cuenta_ti          varchar(30)   = null,
+  --Fin Datos papeleta unica
+  @o_sldcaja            money           = null out,
+  @o_idcierre           tinyint         = null out,
+  @o_ssn_host           int             = null out,
+  @o_ruc_filial         varchar(13)     = null out,
+  @o_direc_filial       descripcion     = null out,
+  @o_nombre_filial      varchar(54)     = null out,
+  @o_ssn                int             = null out,
+  @o_fini               varchar(10)     = null out,
+  @o_term               varchar(32)     = null out,
+  @o_ofi_nombre         varchar(32)     = null out,
+  @o_ofi_ciudad         varchar(32)     = null out,
+  @o_formulario         char(1)         = null out,
+  @o_monto_formulario   money           = null out
+)
+As
+declare
+  @w_return             int,
+  @w_sp_name            varchar(30),
+  @w_tipo_ejec          char(1),
+  @w_time_out           char(1),
+  @w_error_ejec         char(1),
+  @w_estado_ejec        char(2),
+  @w_factor             int,
+  @w_srv_host           varchar(32),
+  @w_num_error          int,
+  @w_msg_error          varchar(64),
+  @w_producto           tinyint,
+  @w_hora               datetime,
+  @w_ssn_host           int,
+  @w_signo              char(1),
+  @w_reversable         char(1),
+  @w_correccion         char(1),
+  @w_fl_conslds         char(1),
+  @w_idcierre           int,
+  @w_idcierre_corr      int,
+  @w_sld_caja           money  ,
+  @w_monto_total        money
+
+---- VERSIONAMIENTO DEL PROGRAMA --------------------------------
+if @t_show_version = 1
+begin
+   print 'Stored Procedure sp_pago_p_unica_local, Version 5.0.0.0'
+   return 0
+end
+-----------------------------------------------------------------
+
+-- Captura nombre de Stored Procedure
+select @w_sp_name       = 'sp_pago_p_unica_local',
+       @w_hora          = getdate(),
+       @w_producto      = 4,
+       @w_reversable    = 'S',
+       @w_ssn_host      = @r_ssn_host,
+       @w_idcierre_corr = null,
+       @w_idcierre      = @r_idcierre,
+       @w_sld_caja      = @r_sldcaja
+
+select @w_monto_total = @i_efe+@i_loc+@i_prop
+if @w_monto_total >= 10000
+    select @o_formulario = 'S', @o_monto_formulario = @w_monto_total
+else
+    select @o_formulario = 'N', @o_monto_formulario = @w_monto_total
+
+-- Verifica el estado de ejecucion de la transaccion financiera
+exec cob_remesas..sp_estado_ejecucion
+     @s_error           = @s_error,
+     @s_msg             = @s_msg,
+     @t_corr            = @t_corr,
+     @s_ofi             = @s_ofi,
+     @t_rty             = @t_rty,
+     @o_srv_host        = @w_srv_host out,    -- Nombre Transerver Central
+     @o_factor          = @w_factor out,      -- Indicador de reverso 1-Normal, -1-Reverso
+     @o_tipo_ejec       = @w_tipo_ejec out,   -- L-Linea, F-Fuera de Linea
+     @o_estado_ejec     = @w_estado_ejec out, -- EJ-Ejecutada, TO-TimeOut, EE-Error
+     @o_time_out        = @w_time_out out,    -- N-No, S-Si
+     @o_error_ejec      = @w_error_ejec out,  -- N-No, S-Si
+     @o_num_error_ejec  = @w_num_error out,   -- Codigo del error
+     @o_msg_error_ejec  = @w_msg_error out,   -- Descripcion del error
+     @o_fl_conslds      = @w_fl_conslds out   -- Bandera fuera de linea con saldos N-No, S-Si
+
+-- La transaccion del central retorno error
+if @w_error_ejec = 'S' and @w_tipo_ejec = 'L'
+begin
+   return 1
+end
+
+-- Control para reverso de transacciones
+if @w_reversable = 'N' and @t_corr = 'S'
+begin
+   -- Error transaccion no definida para reverso
+   exec cobis..sp_cerror
+        @t_from = @w_sp_name,
+        @i_num  = 2600066,
+        @i_sev  = 0
+   return 1
+end
+
+-- Variables para trabajar en modo normal o reverso
+if @w_factor = 1
+  select @w_signo       = 'D',
+         @w_correccion  = ''
+else
+  select @w_signo       = 'C',
+         @w_correccion  = 'R'
+
+
+
+if @s_org = 'U'
+begin
+
+   exec cobis..sp_submit_RPC
+        @i_server = @w_srv_host,
+        @i_sproc  = 'cob_interface..sp_pago_p_unica_r'
+    select s_ssn               = @s_ssn,     
+          s_ssn_branch        = @s_ssn_branch,
+          s_srv               = @s_srv,  
+          s_lsrv              = @s_lsrv,
+          s_user              = @s_user, 
+          s_sesn              = @s_sesn,  
+          s_term              = @s_term,  
+          s_date              = @s_date,
+          s_ofi	              = @s_ofi,        
+          s_rol               = @s_rol, 
+          s_org_err           = @s_org_err,    
+          s_error             = @s_error,    
+          s_sev               = @s_sev,
+          s_msg               = @s_msg,
+          s_org               = @s_org,       
+          t_corr              = @t_corr,  
+          t_ssn_corr          = @t_ssn_corr, 
+          t_debug             = 'N',  
+          t_file              = @t_file,   
+          t_from              = @t_from,               
+          t_rty               = @t_rty,  
+          t_ejec              = @t_ejec,
+          t_trn               = @i_trn,    
+          i_filial            = @t_filial,
+          i_login_aut_reverso = @i_login_aut_reverso,
+          i_motivo_reverso    = @i_motivo_reverso,
+          i_obs_reverso       = @i_obs_reverso,
+          i_idcaja            = @i_idcaja,
+          i_tsn               = @i_tsn,
+          i_nombre_ocx        = @i_nombre_ocx,
+          i_efe               = @i_efe,
+          i_loc				  = @i_loc,
+          i_prop			  = @i_prop,
+          i_mon               = @i_mon,
+          i_num_papeleta      = @i_num_papeleta, 
+          i_nombre            = @i_nombre,
+          i_trn               = @i_trn,
+          i_tipo_ti           = @i_tipo_ti,
+          i_cuenta_ti         = @i_cuenta_ti
+   return 0
+end
+
+-- LOGICA DE TRANSACCION ENVIADA POR USUARIO
+begin tran
+
+insert into cob_remesas..re_tran_monet
+         (tm_fecha, tm_hora, tm_filial, tm_producto, tm_srv_local, tm_srv_host,
+          tm_ssn_local, tm_ssn_local_alterno, tm_ssn_host, tm_oficina, tm_usuario, tm_terminal,
+          tm_correccion, tm_estado_correccion, tm_ssn_local_correccion, tm_tipo_ejecucion,
+          tm_estado_ejecucion, tm_tipo_tran, tm_oficina_cta,tm_signo,tm_autorizada,
+          tm_login_aut, tm_rol, tm_tsn, tm_idcierre, tm_idcaja,
+          tm_moneda, tm_valor, tm_efectivo, 
+          tm_campo1)
+values (@s_date, @w_hora, @t_filial, @w_producto, @s_srv, @w_srv_host,
+        @s_ssn_branch, 0, @w_ssn_host, @s_ofi, @s_user, @s_term,
+        @t_corr, @w_correccion, @t_ssn_corr, @w_tipo_ejec,
+        @w_estado_ejec, @i_trn, @s_ofi,@w_signo,@t_aut,
+        @t_login_aut, @s_rol,@i_tsn, @w_idcierre, @i_idcaja,
+        @i_mon, @i_efe, @i_efe,
+       @i_nombre_ocx)
+if @@error <> 0
+begin
+   exec cobis..sp_cerror  -- ERROR AL INSERTAR TRANSACCION MONETARIA
+        @t_from = @w_sp_name,
+        @i_num = 2600058,
+        @i_sev = 0
+   return 1
+end
+
+if @w_time_out = 'S'
+begin
+   commit tran
+   exec cobis..sp_cerror  -- Error al insertar transaccion local
+        @t_from = @w_sp_name,
+        @i_num  = @w_num_error,
+        @i_msg  = @w_msg_error
+   return 1
+end
+
+if @t_corr = 'S'
+begin
+   update cob_remesas..re_tran_monet
+   set tm_estado_correccion   = 'R'
+   where tm_filial            = @t_filial
+   and tm_ssn_local           = @t_ssn_corr
+   and tm_oficina             = @s_ofi
+   if @@rowcount <> 1
+   begin
+      exec cobis..sp_cerror  -- ERROR AL ACTUALIZAR TRANSACCION MONETARIA
+           @t_from = @w_sp_name,
+           @i_num  = 2600061,
+           @i_sev  = 0
+      return 1
+   end
+end
+
+commit tran
+
+-- Envio de datos al frontend
+select @o_sldcaja            = @r_sldcaja,
+       @o_idcierre           = @r_idcierre,
+       @o_ssn_host           = @r_ssn_host,
+       @o_ruc_filial         = @r_ruc_filial,   
+       @o_direc_filial       = @r_direc_filial, 
+       @o_nombre_filial      = @r_nombre_filial,
+       @o_ssn                = @r_ssn,
+       @o_fini               = @r_fini,
+       @o_term               = @r_term,
+       @o_ofi_nombre         = @r_ofi_nombre,
+       @o_ofi_ciudad         = @r_ofi_ciudad
+
+return 0
+go
+
+ANALIZA EL SIGUIENTE 
+
+/************************************************************************/
+/*    Archivo:                sp_pago_p_unica_r.sp                      */
+/*    Stored procedure:       sp_pago_p_unica_r                         */
+/*    Base de datos:          cob_interface                             */
+/*    Producto:               Teller                                    */
+/*    Disenado por:           Juan Cadavid                              */
+/*    Fecha de escritura:     07-Jul-2023                               */
+/************************************************************************/
+/*                IMPORTANTE                                            */
+/*    Este programa es parte de los paquetes bancarios propiedad de     */
+/*    "MACOSA", representantes exclusivos para el Ecuador de la         */
+/*    "NCR CORPORATION".                                                */
+/*    Su uso no autorizado queda expresamente prohibido asi como        */
+/*    cualquier alteracion o agregado hecho por alguno de sus           */
+/*    usuarios sin el debido consentimiento por escrito de la           */
+/*    Presidencia Ejecutiva de MACOSA o su representante.               */
+/************************************************************************/
+/*                PROPOSITO                                             */
+/*    Este programa procesa la transaccion de Deposito con libreta,     */
+/*    NC con Libreta y deposito companias para Teller                   */
+/************************************************************************/
+/*                MODIFICACIONES                                        */
+/*    FECHA            AUTOR            RAZON                           */
+/*    07/07/2023       J.Cadavid        Pago P Unica                    */
+/************************************************************************/
+use cob_interface
+go
+
+if exists (select * from sysobjects where name = 'sp_pago_p_unica_r')
+   drop proc sp_pago_p_unica_r
+go
+
+create procedure sp_pago_p_unica_r(
+        @s_ssn                    int,
+        @s_ssn_branch             int,
+        @s_srv                    varchar(30),
+        @s_lsrv                   varchar(30),
+        @s_user                   varchar(30),
+        @s_sesn                   int=null,
+        @s_term                   varchar(32),
+        @s_date                   datetime,
+        @s_ofi                    smallint,  /* Localidad origen transaccion */
+        @s_rol                    smallint,
+        @s_org_err                char(1)      = null,    /* Origen de error: [A], [S] */
+        @s_error                  int          = null,
+        @s_sev                    tinyint      = null,
+        @s_msg                    mensaje      = null,
+        @s_org                    char(1),     
+        @t_corr                   char(1)      = 'N',
+        @t_ssn_corr               int          = null, /* Trans a ser reversada */
+        @t_debug                  char(1)      = 'N',
+        @t_file                   varchar(14)  = null,
+        @t_from                   varchar(32)  = null,
+        @t_rty                    char(1)      = 'N',
+        @t_ejec                   char(1)      = null,
+        @t_show_version           bit          = 0, -- Mostrar la version del programa
+        @t_trn                    int,
+        @i_filial                 tinyint      = 1,
+        @i_login_aut_reverso      varchar(30)  = null,
+        @i_motivo_reverso         catalogo     = null,
+        @i_obs_reverso            varchar(30)  = null,
+        @i_idcaja                 int,
+        @i_tsn                    int          = -1,
+        @i_nombre_ocx             varchar(20),
+		@i_ctrlchq                int          = 0,
+        --Datos papeleta unica
+       @i_efe                money             = null,
+       @i_loc				 money             = null,
+       @i_prop				 money             = null,
+	   @i_plaz               money             = 0,
+       @i_mon                tinyint           = null,
+       @i_num_papeleta     	 int               = null, 
+       @i_nombre             varchar(64)       = null,  
+       @i_trn                int               = null,
+       @i_tipo_ti            varchar(3)        = null,
+       @i_cuenta_ti          varchar(30)       = null,
+       --Fin Datos papeleta unica
+        @o_ssn                    int          = null out,
+        @o_fini                   varchar(10)  = null out,
+        @o_term                   varchar(32)  = null out,
+        @o_ofi_nombre             varchar(32)  = null out,
+        @o_ofi_ciudad             varchar(32)  = null out
+)
+as
+declare @w_return               int,
+        @w_sp_name              varchar(30),
+        @w_slddisp              money,
+        @w_ssn                  int,
+        @w_ssn_corr             int,
+        @w_formulario           char(1),
+        @w_monto_formulario     money,
+        @w_idcierre             int,
+        @w_sld_caja             money,
+        @w_ruc_filial           varchar(13),
+        @w_direc_filial         descripcion,
+        @w_nombre_filial        varchar(54),
+        @w_mensaje_error        varchar(255),
+        @w_fini                 varchar(10),
+        @w_term                 varchar(32),
+        @w_ofi_nombre           varchar(32),
+        @w_ofi_ciudad           varchar(32),
+        @w_tipo_ti              varchar(3),
+		@w_fecha_efec           smalldatetime
+
+/*  Captura nombre de Stored Procedure  */
+select @w_sp_name = 'sp_pago_p_unica_r'
+
+if @t_show_version = 1
+begin
+   print 'Stored Procedure %1! Version 5.0.0.0', @w_sp_name
+   return 0
+end
+
+/*  Valida codigo de Transaccion  */
+if @t_trn not in (2744,2731)
+begin
+   /*  Error en codigo de transaccion  */
+   exec cobis..sp_cerror
+        @t_debug= @t_debug,
+        @t_file   = @t_file,
+        @t_from   = @t_from,
+        @i_num   = 201048
+   return 201048
+end
+
+-- Obtener Datos de la Cooperativa
+select @w_ruc_filial    = fi_ruc,
+       @w_direc_filial  = fi_direccion
+from cobis..cl_filial
+where fi_filial = @i_filial
+
+select @w_nombre_filial = pa_char
+from cobis..cl_parametro
+where pa_nemonico = 'NDLEF'
+and pa_producto = 'AHO'
+
+
+-- Valida si se ha aperturado caja
+if @s_org = 'U'
+begin
+    -- Se valida que la caja se encuentra aperturada
+    exec @w_return        = cob_remesas..sp_verifica_caja
+         @t_trn           = @i_trn,
+         @i_filial        = @i_filial,
+         @i_srv           = @s_srv,
+         @i_date          = @s_date,
+         @i_user          = @s_user,
+         @i_ofi           = @s_ofi,
+         @i_mon           = @i_mon,
+         @i_idcaja        = @i_idcaja,
+         @i_val           = @i_efe,
+         @i_corr          = @t_corr,
+         @i_verif_caja    = 'S',
+         @o_idcierre      = @w_idcierre out,
+         @o_saldo         = @w_sld_caja out
+    if @w_return <> 0
+    begin
+       return @w_return
+    end
+
+   -- Logica para obtener el secuencial central para reversar
+    if @t_corr = 'S'
+    begin 
+        --Obtener el ssn para reverso.
+        select @w_ssn_corr = ms_ssn_central 
+        from cob_interface..in_mapeo_secuenciales
+        where ms_ssn_branch = @t_ssn_corr
+        and ms_fecha = @s_date
+        and ms_tipo = 'M'
+        if @@rowcount <> 1
+        begin
+            exec cobis..sp_cerror
+                @t_debug     = @t_debug,
+                @t_file      = @t_file,
+                @t_from      = @w_sp_name,
+                @i_num       = 201163
+            return 201163
+        end
+    end
+    
+    create table #rubros_tmp
+    (
+       concepto   varchar(10),
+       tipo_rubro char(1)
+    )
+
+    begin tran
+        exec @w_return = cob_remesas..sp_pago_p_unica
+            @s_ssn                    = @s_ssn,
+            @s_ssn_branch             = @s_ssn_branch,
+            @s_lsrv                   = @s_lsrv,
+            @s_srv                    = @s_srv, 
+            @s_user                   = @s_user,
+            @s_sesn                   = @s_sesn,
+            @s_term                   = @s_term,
+            @s_date                   = @s_date,
+            @s_ofi                    = @s_ofi,
+            @s_rol                    = @s_rol,
+            @s_org_err                = @s_org_err,
+            @s_error                  = @s_error,
+            @s_sev                    = @s_sev,
+            @s_msg                    = @s_msg,
+            @s_org                    = @s_org,
+            @t_corr                   = @t_corr,
+            @t_ssn_corr               = @w_ssn_corr,
+            @t_debug                  = 'N',
+            @t_file                   = @t_file,
+            @t_from                   = @t_from,
+            @t_rty                    = @t_rty,
+            @t_trn                    = @t_trn, --TRANSACCION PAGO PAPELETA UNICA
+            @t_user                   = @s_user,
+            @t_term                   = @s_term,
+            @t_srv                    = @s_srv,
+            @t_ofi                    = @s_ofi,
+            @t_rol                    = @s_rol,
+            @i_num_papeleta     	  = @i_num_papeleta, 
+            @i_operacion              = 'P',
+            @i_tipo_ti                = @i_tipo_ti,
+            @i_cuenta_ti              = @i_cuenta_ti,
+			@o_fecha_efec             = @w_fecha_efec     out,
+            @o_ssn                    = @w_ssn            out,
+            @o_fini                   = @w_fini           out,
+            @o_term                   = @w_term           out
+        if @w_return != 0
+        begin
+            rollback tran
+            exec cobis..sp_cerror
+                @t_debug        = @t_debug,
+                @t_file         = @t_file,
+                @t_from         = @w_sp_name,
+                @i_num          = @w_return,
+                @i_msg          = @w_mensaje_error
+            if @@trancount > 0
+              rollback tran
+            return @w_return
+        end
+        -- Paso definitivo de cheques locales
+        if @i_loc > 0 and @i_ctrlchq > 0 
+        begin      
+           exec @w_return  = cob_remesas..sp_detallecheque
+                @s_ssn        = @s_ssn,
+                @s_ssn_branch = @s_ssn_branch,
+                @s_user       = @s_user,
+                @s_srv        = @s_srv,
+                @s_lsrv       = @s_lsrv,
+                @s_term       = @s_term,
+                @s_date       = @s_date,
+                @s_ofi        = @s_ofi,
+                @t_corr       = @t_corr,
+                @t_ssn_corr   = @w_ssn_corr,
+                @t_debug      = @t_debug,
+                @t_file       = @t_file,
+                @t_from       = @t_from,
+                @t_rty        = @t_rty,
+                @i_filial     = @i_filial,
+                @i_cta_banco  = @i_num_papeleta,
+                @i_producto   = 3,--Canales
+                @i_idcaja     = @i_idcaja,
+                @i_trn        = @t_trn, -- 2744 - Papeleta Unica 2731 NO APLICA
+                @i_ctrlchq    = @i_ctrlchq,
+                @i_valor      = @i_loc,
+                @i_mon        = @i_mon,
+                @i_estado     = 'I', --Ingresado
+                @i_operacion  = 'L', --Registra cheques locales
+                @i_fecha_efec = @w_fecha_efec,
+                @i_batch      = 'S'
+           if @w_return != 0
+           begin
+              exec cobis..sp_cerror
+                   @t_debug        = @t_debug,
+                   @t_file         = @t_file,
+                   @t_from         = @w_sp_name,
+                   @i_num          = @w_return
+              if @@trancount > 0
+                 rollback tran
+              return @w_return
+           end
+        end
+   
+        -- Paso definitivo de cheques propios
+        if @i_prop > 0 and @i_ctrlchq > 0 --GCU CPR CHEQ_PROPIO
+        begin           
+           exec @w_return  = cob_remesas..sp_detallecheque
+                @s_ssn        = @s_ssn,
+                @s_ssn_branch = @s_ssn_branch,
+                @s_user       = @s_user,
+                @s_srv        = @s_srv,
+                @s_lsrv       = @s_lsrv,
+                @s_term       = @s_term,
+                @s_date       = @s_date,
+                @s_ofi        = @s_ofi,
+                @t_corr       = @t_corr,
+                @t_ssn_corr   = @w_ssn_corr,
+                @t_debug      = @t_debug,
+                @t_file       = @t_file,
+                @t_from       = @t_from,
+                @t_rty        = @t_rty,
+                @i_filial     = @i_filial,
+                @i_cta_banco  = @i_num_papeleta,
+                @i_producto   = 3,--Canales
+                @i_idcaja     = @i_idcaja,
+                @i_trn        = @t_trn, -- 2744 - Papeleta Unica 2731 NO APLICA
+                @i_ctrlchq    = @i_ctrlchq,		   	   
+                @i_valor      = @i_prop,
+                @i_mon        = @i_mon,
+                @i_estado     = 'I', --Ingresado
+                @i_operacion  = 'P', --Registra cheques propios
+                @i_fecha_efec = @w_fecha_efec,
+                @i_batch      = 'S'
+           if @w_return != 0
+           begin
+              exec cobis..sp_cerror
+                   @t_debug        = @t_debug,
+                   @t_file         = @t_file,
+                   @t_from         = @w_sp_name,
+                   @i_num          = @w_return
+              if @@trancount > 0
+                 rollback tran
+              return @w_return
+           end
+        end
+        SELECT @w_ssn = @s_ssn
+        
+        if @t_corr = 'N'
+        begin 
+            -- Registro de relacion de secuenciales para manejo de reversos
+            insert into cob_interface..in_mapeo_secuenciales(ms_fecha, ms_tipo, ms_ssn_central, ms_ssn_branch)
+            values(@s_date, 'M', @w_ssn, @s_ssn_branch)
+            if @@error != 0
+            begin
+               exec cobis..sp_cerror
+                    @t_debug        = @t_debug,
+                    @t_file         = @t_file,
+                    @t_from         = @w_sp_name,
+                    @i_num          = 107076
+               return 107076
+            end
+        end
+         SELECT @w_tipo_ti = pu_tipo_cta_trans_int FROM cob_remesas..re_papeleta_unica WHERE pu_codigo = @i_num_papeleta
+        IF @w_tipo_ti = NULL
+        BEGIN
+            -- Actualizacion de totales de caja
+            exec @w_return = cob_remesas..sp_upd_totales
+                 @i_ofi          = @s_ofi,
+                 @i_rol          = @s_rol,
+                 @i_user         = @s_user,
+                 @i_mon          = @i_mon,
+                 @i_trn          = @i_trn,
+                 @i_nodo         = @s_srv,
+                 @i_tipo         = 'L',
+                 @i_corr         = @t_corr,
+				 @i_efectivo     = @i_efe,
+                 @i_cheque       = @i_prop,
+                 @i_chq_locales  = @i_loc,
+                 @i_chq_ot_plaza = @i_plaz,
+                 @i_ssn          = @s_ssn,
+                 @i_idcaja       = @i_idcaja,
+                 @i_filial       = @i_filial,
+                 @i_saldo_caja   = @w_sld_caja,
+                 @i_idcierre     = @w_idcierre,
+                 @i_batch        = 'N'
+            if @w_return != 0
+            begin
+                rollback tran
+                exec cobis..sp_cerror
+                     @t_debug  = @t_debug,
+                     @t_file   = @t_file,
+                     @t_from   = @w_sp_name,
+                     @i_num    = 205000
+                return 205000
+            end
+        END
+
+        if @t_corr = 'N'
+        begin
+            -- Insercion de log Teller Central
+            insert into cob_remesas..re_tran_monet
+                     (tm_fecha, tm_hora, tm_filial, tm_producto, tm_srv_local, tm_srv_host,
+                      tm_ssn_local, tm_ssn_local_alterno, tm_ssn_host, tm_oficina, tm_usuario, tm_terminal,
+                      tm_correccion, tm_estado_correccion, tm_ssn_local_correccion, tm_tipo_ejecucion,
+                      tm_estado_ejecucion, tm_tipo_tran, tm_oficina_cta,tm_signo,tm_autorizada,
+                      tm_login_aut, tm_rol, tm_tsn, tm_idcierre, tm_idcaja,
+                      tm_moneda, tm_efectivo, tm_chq_propios, tm_chq_locales, tm_chq_ot_plazas,
+                      tm_campo1,
+                      tm_login_aut_reverso, tm_comentario, tm_motivo_reverso)
+            values (@s_date, getdate(), @i_filial, 4, @s_srv, @s_lsrv,
+                    @s_ssn_branch, 0, @s_ssn, @s_ofi, @s_user, @s_term,
+                    @t_corr, null, null, 'L',
+                    'EJ', @i_trn, @s_ofi,'C','N',
+                    null, @s_rol,@i_tsn, @w_idcierre, @i_idcaja, 
+                    @i_mon, @i_efe, @i_prop, @i_loc, @i_plaz,
+                    @i_nombre_ocx,
+                    @i_login_aut_reverso, @i_obs_reverso, @i_motivo_reverso)
+            if @@error <> 0
+            begin
+               exec cobis..sp_cerror  -- ERROR AL INSERTAR TRANSACCION MONETARIA
+                    @t_debug  = @t_debug,
+                    @t_file   = @t_file,
+                    @t_from   = @w_sp_name,
+                    @i_num    = 203000
+               return 203000
+            end
+        end
+        else
+        begin
+            update cob_remesas..re_tran_monet
+            set tm_estado_correccion   = 'R',
+                tm_comentario          = @i_obs_reverso,
+                tm_motivo_reverso      = @i_motivo_reverso,
+                tm_login_aut_reverso   = @i_login_aut_reverso
+            where tm_filial            = @i_filial
+            and tm_ssn_host            = @w_ssn_corr
+            and tm_oficina             = @s_ofi
+            if @@rowcount <> 1
+            begin
+               exec cobis..sp_cerror  -- ERROR AL ACTUALIZAR TRANSACCION MONETARIA
+                    @t_debug  = @t_debug,
+                    @t_file   = @t_file,
+                    @t_from   = @w_sp_name,
+                    @i_num    = 205032
+               return 205032
+            end
+        end
+
+    commit tran
+
+    -- Envio de informacion a TellerWeb
+    if @t_ejec = 'R'    
+    begin
+       select r_results_submit_rpc =  "results_submit_rpc",
+              r_sldcaja            = @w_sld_caja,
+              r_idcierre           = @w_idcierre,
+              r_ssn_host           = @w_ssn,
+              r_slddisp            = @w_slddisp,
+              r_ruc_filial         = @w_ruc_filial,
+              r_direc_filial       = @w_direc_filial,
+              r_nombre_filial      = @w_nombre_filial,
+              r_ssn                = @w_ssn,
+              r_fini               = @w_fini,
+              r_term               = @w_term,
+              r_ofi_nombre         = @w_ofi_nombre,
+              r_ofi_ciudad         = @w_ofi_ciudad
+    
+    end
+
+end   -- Fin if @s_org = 'U'
+return 0
+go
+
+
+EL OTRO
+
+/************************************************************************/
+/*   Archivo:           sp_pago_p_unica.sp                              */
+/*   Stored procedure:    sp_pago_p_unica                               */
+/*   Base de datos:     cob_remesas                                     */
+/*   Producto:               Teller                                     */
+/*   Disenado por:           Juan Cadavid                               */
+/************************************************************************/
+/*            IMPORTANTE                                                */
+/*   Este programa es parte de los paquetes bancarios propiedad de      */
+/*   "MACOSA", representantes exclusivos para el Ecuador de la          */
+/*   "NCR CORPORATION".                                                 */
+/*   Su uso no autorizado queda expresamente prohibido asi como         */
+/*   cualquier alteracion o agregado hecho por alguno de sus            */
+/*   usuarios sin el debido consentimiento por escrito de la            */
+/*   Presidencia Ejecutiva de MACOSA o su representante.                */
+/*            PROPOSITO                                                 */
+/*   Este programa procesa la transaccion de pagos de papeleta unica    */
+/*            MODIFICACIONES                                            */
+/*   FECHA      AUTOR      RAZON                                        */
+/*   05/07/2023   JCADAVID      PAGO PAPELETA UNICA                     */
+/*   13/08/2024   RURQUIJO      AJUSTE VALIDACION PAGO APORTACIONES     */
+/*   07/Jul/2025  F. ANDERSON   Se actualiza estado cabecera PU         */
+/*   13/Ago/2025  F. ANDERSON   Se realiza ajuste en aportaciones       */
+/*   21/Oct/2025  J. Chavarro   Se realiza ajuste condición             */  
+/*                              cc_producto = '02'AND cc_estado = 'A'.  */
+/*                              Ajuste consulta de cuenta y cliente     */ 
+/*								Producto 20                             */
+/************************************************************************/
+use cob_remesas
+go
+if exists (select 1 from sysobjects where name = 'sp_pago_p_unica')
+   drop proc sp_pago_p_unica
+go
+create proc sp_pago_p_unica (
+   @s_ssn          int,
+   @s_srv          varchar(30),
+   @s_lsrv         varchar(30),
+   @s_user         varchar(30),
+   @s_sesn         int=null,
+   @s_term         varchar(10),
+   @s_date         datetime,
+   @s_ofi          tinyint,   /* Localidad origen transaccion */
+   @s_rol          smallint,
+   @s_org_err      char(1)   = null,   /* Origen de error: [A], [S] */
+   @s_error        int   = null,
+   @s_sev          tinyint   = null,
+   @s_msg          mensaje   = null,
+   @s_org          char(1),
+   @t_corr         char(1) = 'N',
+   @t_ssn_corr     int = null,   /* Trans a ser reversada */
+   @t_debug        char(1) = 'N',
+   @t_file         varchar(14) = null,
+   @t_from         varchar(32) = null,
+   @t_rty          char(1) = 'N',
+   @t_trn          smallint,
+   --Datos papeleta unica
+   @i_efe                money = null,
+   @i_loc				 money = null,
+   @i_prop				 money = null,
+   @i_mon                tinyint = 0,
+   @i_num_papeleta     	 int     = null, 
+   @i_nombre             varchar(64)     = null,
+   @i_tipo_ti            varchar(3)    = null,
+   @i_cuenta_ti          varchar(30)   = null,
+   @i_prodeb             VARCHAR(10) = null,
+   @i_concep             VARCHAR(10) = null,
+   --Fin Datos papeleta unica
+   @i_operacion			 char(1) = null,--P-(Procesar),V-(Validar)
+   @i_reproceso          char(1) = 'N',
+   @o_ssn                int         = null out,
+   @o_fini               varchar(10) = null out,
+   @o_term               varchar(32) = null out,
+   @o_validado           char(1) = null out,
+   @o_valida_error       char(1) = null out,
+   @o_fecha_efec         datetime= null out,
+   @o_cuenta_ti          varchar(100)=null out,
+   @o_tipo_cuenta_ti     varchar(100)=null out
+)
+as
+declare   
+   @w_return             int,
+   @w_rpc                varchar(60),
+   @w_sp_name            varchar(30),
+   @w_factor             int,
+   @w_estado             varchar(1),
+   @w_signo              char(1),
+   @w_causa              varchar(3),
+   @w_estado_reg         char(1),
+   @w_numero             int,
+   @w_valor              money,
+   @w_cuenta             varchar(24),
+   @w_cuenta_v           int,
+   @w_contador           int,
+   @w_producto           int,		
+   @w_causa_ndnc         varchar(10),
+   @w_causa_ndti         varchar(10),
+   @w_trn_org            smallint,
+   @w_ssn                int,
+   @w_ssn_corr           int,
+   @w_ssn_ing            int,
+   @w_ssn_pag            int,
+   @w_operacion          int,
+   @w_reverso_bool       varchar(6),
+   @w_ofi_varchar        varchar(10),
+   @w_mask               varchar(16),
+   @valor                money,
+   @w_transaccion        char(1),
+   @w_nemonico           varchar(10),
+   @w_producto_ap        char(2),
+   @w_oficina_ap         smallint,
+   @w_cliente_ap         int,
+   @w_reingreso_ap       tinyint,
+   @w_tipo_ti            varchar(3),
+   @w_cuenta_ti          varchar(30),
+   @w_monto_ti           money,
+   @w_disponible_cta_ti  money,
+   @w_ap_tran            varchar(10),
+   @w_ap_caus            varchar(10),
+   @w_cod_transaccion    varchar(10),
+   @w_cod_causa          varchar(4),
+   @w_comentario         varchar(60),
+   @w_id_transaccion     BIGINT,
+   @w_cuota              money,
+   @w_mora               money,
+   @w_pago_adelantado    money,
+   @w_cta                VARCHAR(30),
+   @w_cliente            INT,
+   @w_tipo_tran          varchar(10)
+   
+   
+/*  Captura nombre de Stored Procedure  */
+select  @w_sp_name = 'sp_pago_p_unica',
+        @o_ssn     = @s_ssn,
+        @o_term    = @s_term
+
+/*  Modo de debug  */
+if @t_debug = 'S'
+begin
+   exec cobis..sp_begin_debug @t_file=@t_file
+   select   '/**  Stored Procedure  **/ ' = @w_sp_name,
+      s_ssn        = @s_ssn,
+      s_srv        = @s_srv,
+      s_lsrv       = @s_lsrv,
+      s_user       = @s_user,
+      s_sesn       = @s_sesn,
+      s_term       = @s_term,
+      s_date       = @s_date,
+      s_ofi        = @s_ofi,
+      s_rol        = @s_rol,
+      s_org_err    = @s_org_err,
+      s_error      = @s_error,
+      s_sev        = @s_sev,
+      s_msg        = @s_msg,
+      s_ori        = @s_org,   
+      t_corr       = @t_corr,
+      t_ssn_corr   = @t_ssn_corr,
+      t_from       = @t_from,
+      t_file       = @t_file, 
+      t_rty        = @t_rty,
+      t_trn        = @t_trn,      
+      i_efe        = @i_efe,
+	  i_loc	       = @i_loc,
+      i_prop	   = @i_prop,
+      i_mon        = @i_mon,
+      i_num_papeleta = @i_num_papeleta, 
+      i_nombre       = @i_nombre  
+   exec cobis..sp_end_debug 
+end
+
+/*  Modo de correccion  */
+if @t_corr = 'N'
+begin
+   select @w_factor = 1, @w_signo = 'C', @w_estado = null
+end
+else
+begin
+   select @w_factor = -1, @w_signo = 'D', @w_estado = 'R'
+end
+
+/* Actualizacion de Totales de cajero */
+--if @t_trn <> 2744
+--begin
+   /* Error en codigo de transaccion */
+/*   exec cobis..sp_cerror
+        @t_debug     = @t_debug,
+        @t_file      = @t_file,
+        @t_from      = @w_sp_name,
+        @i_num       = 201048
+   return 1
+end*/    
+
+IF @i_operacion = 'V'
+BEGIN
+    CREATE TABLE #det_temp(
+		numero                int          not null,    
+		codigo_papeleta       int          not null,   
+		cuenta                char(16)     not null,
+		producto              int          not null,
+		valor                 money        not null,
+		estado                char(1)      not null,
+		mensaje               varchar(150) null
+    )    
+    SELECT top 1 @w_transaccion = tt_signo 
+    FROM cob_canales..ca_tipo_transaccion
+    JOIN re_detalle_papeleta_unica ON tt_codigo = dp_transaccion
+    WHERE dp_codigo_papeleta = @i_num_papeleta
+     
+    -- Se toma la cuenta de debito para transferencias internas si existe
+    SELECT @w_tipo_ti = pu_tipo_cta_trans_int, 
+	       @w_cuenta_ti = pu_cta_trans_int, 
+		   @w_monto_ti = pu_monto_trans_int 
+	FROM cob_remesas..re_papeleta_unica WHERE pu_codigo = @i_num_papeleta
+    
+    IF @w_cuenta_ti = NULL
+    BEGIN
+        SELECT @w_cuenta_ti = @i_cuenta_ti
+        SELECT @w_tipo_ti = @i_tipo_ti
+    END
+    
+    IF @w_cuenta_ti != NULL
+    BEGIN
+        IF @w_tipo_ti = '1'
+        BEGIN
+            SELECT @w_disponible_cta_ti = ah_disponible 
+			FROM cob_ahorros..ah_cuenta 
+			WHERE ah_cta_banco = @w_cuenta_ti
+            
+            IF @w_disponible_cta_ti < @w_monto_ti
+            BEGIN
+                exec cobis..sp_cerror 
+                    @t_debug = @t_debug, 
+                    @t_file  = @t_file, 
+                    @t_from  = @w_sp_name, 
+                    @i_num     = 221091  -- SALDO INSUFICIENTE
+                return 221091
+            END            
+        END        
+        
+        IF @w_tipo_ti = '9'
+        BEGIN            
+            select @w_cliente_ap = cc_cliente 
+            from cob_aportaciones..ap_cuenta_producto
+            where cc_cuenta = @w_cuenta_ti
+            --AND cc_producto = '02'
+            --AND cc_estado = 'A'
+            
+            --Validar
+
+            exec @w_return = cob_aportaciones..sp_val_pago_retiro_cuenta
+                             @s_date            = @s_date,
+                             @t_debug           = 'N',
+                             @i_tipo_validacion = 'RETIRO',
+                             @i_cliente         = @w_cliente_ap,
+                             @i_cuenta          = @w_cuenta_ti
+             IF @w_return != 0
+             BEGIN
+                exec cobis..sp_cerror 
+                    @t_debug = @t_debug, 
+                    @t_file  = @t_file, 
+                    @t_from  = @w_sp_name, 
+                    @i_num     = @w_return  
+                return @w_return
+             end
+        END
+    END
+	
+	INSERT INTO #det_temp
+	SELECT dp_numero,dp_codigo_papeleta,dp_cuenta,dp_producto,dp_valor,dp_estado,dp_mensaje
+	FROM cob_remesas..re_detalle_papeleta_unica WHERE dp_codigo_papeleta = @i_num_papeleta --AND dp_estado <> 'E'
+	
+	SELECT @w_contador = COUNT(1) FROM #det_temp
+	
+	SELECT @w_numero = 1
+	/* Inicio ciclo para papeleta unica */
+	WHILE @w_numero <= @w_contador
+	BEGIN
+		SELECT top 1
+			@w_numero = numero,
+			@w_valor  = valor,
+			@w_cuenta = cuenta,
+			@w_producto = producto
+		FROM #det_temp
+		WHERE numero = @w_numero
+		ORDER BY numero
+		
+		IF @w_producto = 20
+		BEGIN		
+		    select @w_ssn = (select se_numero + 1 from cobis..ba_secuencial)
+
+		    select @w_cuenta = cc_cuenta
+		    from cob_aportaciones..ap_cuenta_producto
+		    where (cc_cuenta = @w_cuenta
+		    or cc_certificado = @w_cuenta)
+		    and cc_concepto = 'CxC'
+		    
+		    SELECT @w_producto_ap = CONVERT(CHAR,substring(@w_cuenta,1,2))
+		    
+		    select @w_cliente_ap = cc_cliente 
+            from cob_aportaciones..ap_cuenta_producto
+            where cc_cuenta = @w_cuenta
+            AND cc_producto = @w_producto_ap
+            AND cc_estado in ('A', 'S')
+ 			--Operacion Credito
+			if @w_transaccion = '+' 
+			begin 
+			   select @w_cod_transaccion = c.codigo 
+                 from cob_aportaciones..ap_producto p
+                 join cobis..cl_tabla t ON t.tabla = 'ap_transacciones_nc'
+                 join cobis..cl_catalogo c ON c.tabla = t.codigo AND c.valor = p.pr_descripcion
+                where p.pr_numero = @w_producto_ap
+			   select @w_cod_causa = '4500'
+			   select @w_comentario = 'PAGO DE APORTES POR PAPELETA'
+			   select @w_tipo_tran = 'PAGO'
+			end
+			else 
+			begin
+			   select @w_cod_transaccion = '20704'
+			   select @w_cod_causa       = '8500'
+			   select @w_comentario      = 'RETIRO DE CAPITAL EXTERNO POR PAPELETA'
+			   select @w_tipo_tran = 'RETIRO'
+			end
+
+            exec @w_return = cob_aportaciones..sp_val_pago_retiro_cuenta
+                             @s_date            = @s_date,
+                             @t_debug           = 'N',
+                             @i_tipo_validacion = @w_tipo_tran,
+                             @i_cliente         = @w_cliente_ap,
+                             @i_cuenta          = @w_cuenta
+            IF @w_return != 0
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+            ELSE
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'V',dp_mensaje='0 - VALIDADO'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END            
+		END
+		/* Inicio validacion producto 11 */
+		IF @w_producto = 11
+		BEGIN
+            -- Verifica existencia de la tarjeta de credito
+            select @w_mask=tc_tarj_mask 
+			from cob_canales..ca_tarjeta_credito 
+			where tc_id_tarjeta = @w_cuenta
+            if @w_mask is null
+            begin
+                select @w_return  = 201004
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+		        continue
+            end
+			--Si todo salio correctamente enviamos a validado
+		    UPDATE cob_remesas..re_detalle_papeleta_unica 
+			set dp_estado = 'V',dp_mensaje='0 - VALIDADO'
+            WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta			
+		END 		
+		/* Inicio validacion producto 7 */
+		IF @w_producto = 7
+		BEGIN 
+            EXEC @w_return = cob_cartera..sp_validar_pagable
+                 @s_date = @s_date,
+                 @i_canal = 'JTELLER',
+                 @i_banco = @w_cuenta,
+                 @i_monto_pago = @w_valor,
+                 @i_moneda_pago = @i_mon
+            IF @w_return != 0
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+            ELSE
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'V',dp_mensaje='0 - VALIDADO'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+		END 
+		/* VALIDACIONES DE AHORROS */
+		IF @w_producto = 4
+		BEGIN
+		    -- Extraccion datos de cuenta
+            select @w_estado = ah_estado ,
+                   @w_cuenta_v = ah_cuenta
+            from cob_ahorros..ah_cuenta 
+			where ah_cta_banco = @w_cuenta
+            
+            -- Verifica existencia de cuenta
+            if @w_cuenta_v = null or not exists (select * from cob_ahorros..ah_cuenta where ah_cta_banco = @w_cuenta)
+            begin
+                select @w_return  = 201004
+                UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+		        continue
+            end        
+            
+            -- Verificar Cuenta Activa            
+            if not exists(select 1 from cob_ahorros..ah_cuenta where ah_cta_banco = @w_cuenta and ah_estado = 'A' )
+            begin                
+                select @w_return  = 221048
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+		        continue
+            end
+            -- Verificar Bloqueo Cuenta
+            if exists(select 1 from cob_ahorros..ah_ctabloqueada where cb_cuenta = @w_cuenta_v and cb_tipo_bloqueo = '1' and  cb_estado = 'V') 
+            begin                
+                select @w_return  = 221056
+                UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+		        continue
+            end            
+            if exists(select 1 from cob_ahorros..ah_ctabloqueada where cb_cuenta = @w_cuenta_v and cb_tipo_bloqueo = '3' and  cb_estado = 'V') 
+            begin                
+                select @w_return  = 221058
+                UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+		        continue
+            end           
+           
+            -- Verificar disponible si es un retiro             
+            if @w_transaccion = '-'
+            begin
+                if @valor > (select ah_disponible from cob_ahorros..ah_cuenta where ah_cta_banco = @w_cuenta)
+                begin                     
+                    select @w_return  = 221043
+                    UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                    WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                    SELECT @w_numero = @w_numero + 1
+                    continue
+                end
+            end            
+		    
+		    --Si todo salio correctamente enviamos a validado
+		    UPDATE cob_remesas..re_detalle_papeleta_unica 
+			set dp_estado = 'V',dp_mensaje='0 - VALIDADO'
+            WHERE dp_numero = @w_numero 
+			and dp_codigo_papeleta = @i_num_papeleta
+			
+		END
+		SELECT @w_numero = @w_numero + 1
+	END /* Fin Ciclo para papeleta unica */
+	
+	IF @i_reproceso = 'N'
+	BEGIN
+	    IF exists (select 1 from cob_remesas..re_detalle_papeleta_unica where dp_estado != 'V' and dp_codigo_papeleta = @i_num_papeleta)
+        BEGIN
+            SELECT @o_valida_error = 'S'
+            UPDATE cob_remesas..re_papeleta_unica 
+			set pu_estado = 'V', pu_valida_error = 'S' where pu_codigo = @i_num_papeleta
+        END
+        ELSE
+        BEGIN
+            SELECT @o_valida_error = 'N'
+            UPDATE cob_remesas..re_papeleta_unica 
+			set pu_estado = 'V', pu_valida_error = 'N' where pu_codigo = @i_num_papeleta
+        END
+	END
+	
+	IF @i_reproceso = 'S'
+	BEGIN
+	    SELECT @o_valida_error = 'N'
+        UPDATE cob_remesas..re_papeleta_unica 
+		set pu_estado = 'V', pu_valida_error = 'N' where pu_codigo = @i_num_papeleta
+	END
+	
+	select @o_validado = 'S'	
+    DROP TABLE #det_temp	
+END
+
+/*Procesamos la Papeleta*/
+IF @i_operacion = 'P'
+BEGIN
+    SELECT top 1 @w_transaccion = tt_signo 
+    FROM cob_canales..ca_tipo_transaccion
+    JOIN re_detalle_papeleta_unica ON tt_codigo = dp_transaccion
+    WHERE dp_codigo_papeleta = @i_num_papeleta
+    
+    SELECT @w_contador = COUNT(1) FROM cob_remesas..re_detalle_papeleta_unica 
+	WHERE dp_codigo_papeleta = @i_num_papeleta
+    
+    SELECT @w_numero = 1
+    
+    BEGIN TRAN    
+        -- Aplicamos débito a cuenta si es de transferencia interna
+        -- Se toma la cuenta de debito para transferencias internas si existe
+        SELECT @w_tipo_ti = pu_tipo_cta_trans_int, 
+		       @w_cuenta_ti = pu_cta_trans_int, 
+			   @w_monto_ti = pu_monto_trans_int 
+        FROM cob_remesas..re_papeleta_unica 
+		WHERE pu_codigo = @i_num_papeleta
+    
+        IF @w_cuenta_ti IS NULL
+        BEGIN
+            SELECT @w_cuenta_ti = @i_cuenta_ti
+            SELECT @w_tipo_ti = @i_tipo_ti
+        END
+    
+        IF @w_cuenta_ti IS NOT NULL
+        BEGIN
+            UPDATE cob_remesas..re_papeleta_unica 
+			SET pu_tipo_cta_trans_int = @w_tipo_ti, pu_cta_trans_int = @w_cuenta_ti 
+			WHERE pu_codigo = @i_num_papeleta
+        END
+    
+        EXEC @w_ssn = ADMIN...rp_ssn
+    
+        IF @w_cuenta_ti IS NULL
+        BEGIN
+            SELECT @w_tipo_ti = NULL
+        END
+    
+    IF @w_tipo_ti = '1'
+    BEGIN
+	    SELECT @w_causa_ndti = pa_char from cobis..cl_parametro where pa_nemonico = 'CNDPTI' and pa_producto = 'AHO'
+		
+		select @w_causa_ndti = codigo from cobis..cl_catalogo
+        where tabla in (select codigo from cobis..cl_tabla
+                       where tabla in ('ah_causa_nd'))
+                       and codigo = @w_causa_ndti
+                       and estado = 'V'
+        if @@rowcount = 0            
+        begin 
+            exec cobis..sp_cerror 
+            @t_debug = @t_debug, 
+            @t_file  = @t_file, 
+            @t_from  = @w_sp_name, 
+            @i_num     = 221087 
+            return 221087
+        end		
+	    --NOTA DE DEBITO AHORROS S/L
+        select @w_rpc = 'cob_ahorros..sp_ahndc_automatica'
+        select @w_trn_org = 264        
+        exec @w_return = @w_rpc
+             @s_ssn          = @w_ssn,
+             @s_srv          = @s_srv,
+             @s_ofi          = @s_ofi,
+             @s_user         = @s_user,
+             @s_term         = @s_term,
+             @t_ssn_corr     = @w_ssn_corr,
+             @t_trn          = @w_trn_org,
+             @t_corr         = @t_corr,
+             @i_corr         = @t_corr,
+             @i_alt          = 1,
+             @i_cta          = @w_cuenta_ti,
+             @i_val          = @w_monto_ti,
+             @i_cau          = @w_causa_ndti,
+             @i_mon          = @i_mon,
+             @i_fecha        = @s_date,
+             @i_canal        = '8'
+        if @w_return <> 0
+        begin
+            ROLLBACK TRAN
+            exec cobis..sp_cerror 
+                @t_debug = @t_debug, 
+                @t_file  = @t_file, 
+                @t_from  = @w_sp_name, 
+                @i_num     = @w_return 
+            return @w_return
+        end
+    END
+    
+    IF @w_tipo_ti = '9'
+    BEGIN
+        EXEC @w_ssn = ADMIN...rp_ssn
+        SELECT @w_producto_ap = substring(@w_cuenta_ti,1,2)
+        
+        select @w_cliente_ap = cc_cliente 
+        from cob_aportaciones..ap_cuenta_producto
+        where cc_cuenta = @w_cuenta_ti
+        --AND cc_producto = '02'
+        --AND cc_estado = 'A'
+            --Reemplazar por sp_pago_aportaciones_canales guiarse en el pago de seguros     
+            exec @w_return = cob_aportaciones..sp_pago_aportaciones_canales
+                 @s_ssn = @s_ssn,
+                 @s_date = @s_date,
+                 @s_ofi = @s_ofi,
+                 @s_term = @s_term,
+                 @s_user = @s_user,
+                 @i_cuenta = @w_cta,
+                 @i_cliente = @w_cliente,
+                 @i_monto = @i_efe,
+                 @i_monto_chq_propio = @i_prop,
+                 @i_monto_chq_local = @i_loc,
+                 @i_comentario = @i_concep,
+                 @i_canal = 'JTELLER',
+                 @o_monto_pagado_cuota = @w_cuota out,
+                 @o_monto_pagado_mora = @w_mora out,
+                 @o_monto_cta_abono = @w_pago_adelantado out,
+                 @o_id_transaccion = @w_id_transaccion out
+                 if @w_return <> 0
+              begin          
+                   exec cobis..sp_cerror
+                   @t_debug = @t_debug,
+                   @t_file = @t_file,
+                   @t_from = @w_sp_name,
+                   @i_num = @w_return 
+                   return @w_return
+                end
+    END
+    /* Inicio ciclo while de procesado */
+    WHILE @w_numero <= @w_contador
+    BEGIN
+        EXEC @w_ssn = ADMIN...rp_ssn
+        
+        IF @t_corr = 'S'
+        BEGIN
+            /*Tomamos el secuancial de la transacción a reversar*/
+            SELECT @w_ssn_corr = dp_secuencial 
+			FROM cob_remesas..re_detalle_papeleta_unica 
+			WHERE dp_numero = @w_numero AND dp_codigo_papeleta = @i_num_papeleta
+        END
+    
+        SELECT top 1
+            @w_numero = dp_numero,
+            @w_valor  = dp_valor,
+            @w_cuenta = dp_cuenta,
+			@w_producto = dp_producto
+        FROM cob_remesas..re_detalle_papeleta_unica 
+		WHERE dp_codigo_papeleta = @i_num_papeleta
+        AND dp_numero = @w_numero
+        ORDER BY dp_numero        
+       
+        --Aportaciones
+        IF @w_producto = 20
+        BEGIN
+			select @w_cuenta = cc_cuenta
+			from cob_aportaciones..ap_cuenta_producto
+			where (cc_cuenta = @w_cuenta OR cc_certificado = @w_cuenta)	
+			
+			select @w_cliente_ap = cc_cliente 
+			from cob_aportaciones..ap_cuenta_producto
+			where cc_cuenta = @w_cuenta
+			
+            if @w_transaccion = '+'
+            begin
+                SELECT @w_ap_tran = '20716'
+                SELECT @w_ap_caus = '8500'
+            end
+
+            if @w_transaccion = '-'
+            begin
+                SELECT @w_ap_tran = '20704'
+                SELECT @w_ap_caus = '8500'
+            end   
+
+            exec @w_return = cob_aportaciones..sp_pago_aportaciones_canales
+                 @s_ssn = @s_ssn,
+                 @s_date = @s_date,
+                 @s_ofi = @s_ofi,
+                 @s_term = @s_term,
+                 @s_user = @s_user,
+                 @i_cuenta = @w_cuenta,	
+                 @i_transaccion = @w_transaccion,
+                 @i_causa = @w_causa,
+                 @i_cliente = @w_cliente_ap,
+                 @i_monto = @w_valor,
+                 @i_comentario = @i_concep,
+                 @i_canal = 'JTELLER',
+                 @o_monto_pagado_cuota = @w_cuota out,
+                 @o_monto_pagado_mora = @w_mora out,
+                 @o_monto_cta_abono = @w_pago_adelantado out,
+                 @o_id_transaccion = @w_id_transaccion out
+                 if @w_return <> 0
+              begin          
+                   exec cobis..sp_cerror
+                   @t_debug = @t_debug,
+                   @t_file = @t_file,
+                   @t_from = @w_sp_name,
+                   @i_num = @w_return 
+                   return @w_return
+                end
+            IF @w_return != 0
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                ROLLBACK TRAN
+            END
+            ELSE
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'V',dp_mensaje='0 - VALIDADO'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+    END   
+            
+        END
+        /* Inicio procesado producto cartera */
+        IF @w_producto = 7
+        BEGIN 
+            SELECT @w_operacion = op_operacion 
+			FROM cob_cartera..ca_operacion WHERE op_banco = @w_cuenta        
+            IF @t_corr <> 'S'
+            BEGIN                 
+                SELECT @w_rpc = 'cob_cartera..sp_pago_cartera'        
+                EXEC @w_return = @w_rpc 
+                    @s_ssn          = @w_ssn,
+                    @s_srv          = @s_srv,
+                    @s_ofi          = @s_ofi,
+                    @s_user         = @s_user,
+                    @s_term         = @s_term,
+                    @s_date         = @s_date,
+                    @i_banco        = @w_cuenta,
+                    @i_secuencial   = null,
+                    @i_beneficiario = 'PAGO CARTERA',
+                    @i_fecha_vig    = @s_date,
+                    @i_ejecutar     = 'S',
+                    @i_retencion    = 0,
+                    @i_en_linea     = 'S',
+                    @i_producto     = 'EFEMN',
+                    @i_cuenta       = '',
+                    @i_monto_mpg    = @w_valor,
+                    @i_moneda       = 0,
+                    @i_canal        = 'JTELLER',
+                    @o_secuencial_ing = @w_ssn_ing out                
+                IF @w_return != 0
+                BEGIN
+                    ROLLBACK TRAN
+                    UPDATE cob_remesas..re_detalle_papeleta_unica 
+					set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                    WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                    exec cobis..sp_cerror
+                        @t_debug        = @t_debug,
+                        @t_file         = @t_file,
+                        @t_from         = @w_sp_name,
+                        @i_num          = @w_return
+                    return @w_return
+                END                
+            END /* Fin Pago cartera*/
+            ELSE /* Inicio reverso de cartera*/
+            BEGIN            
+                SELECT @w_ssn_pag = ab_secuencial_pag
+                FROM cob_cartera..ca_abono
+                WHERE ab_operacion = @w_operacion
+                AND ab_secuencial_ing = @w_ssn_corr
+            
+                EXEC    @w_return       =   cob_cartera..sp_fecha_valor
+                        @t_trn          =   7049,
+                        @i_banco        =   @w_cuenta,
+                        @i_secuencial   =   @w_ssn_pag,
+                        @i_operacion    =   'R',
+                        @i_formato_fecha=   103,
+                        @i_es_atx       =   'S',
+                        @s_srv          =   @s_srv,
+                        @s_user         =   @s_user,
+                        @s_term         =   @s_term,
+                        @s_ofi          =   @s_ofi,
+                        @s_rol          =   @s_rol,
+                        @s_ssn          =   @s_ssn,
+                        @s_lsrv         =   @s_lsrv,
+                        @s_date         =   @s_date,
+                        @s_sesn         =   @s_sesn,
+                        @s_org          =   @s_org
+                IF @w_return != 0
+                BEGIN
+                    ROLLBACK TRAN
+                    UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                    WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                    exec cobis..sp_cerror
+                        @t_debug        = @t_debug,
+                        @t_file         = @t_file,
+                        @t_from         = @w_sp_name,
+                        @i_num          = @w_return
+                    return @w_return
+                END
+            END /* Fin reverso de cartera*/
+            
+            IF @t_corr <> 'S'
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'P',dp_mensaje='0 - PROCESADO',dp_secuencial=@w_ssn_ing
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+            ELSE
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'R',dp_mensaje='0 - REVERSADO'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+        END /* Fin procesado producto cartera */
+        /* Inicio procesado producto ahorros */
+        IF @w_producto = 4
+        BEGIN 
+            select @w_rpc = 'cob_ahorros..sp_ahndc_automatica'
+            
+            if @w_transaccion = '+'
+            begin
+                SELECT @w_nemonico  = 'TCRCTA'
+				SELECT @w_causa_ndnc = pa_char from cobis..cl_parametro where pa_nemonico = 'CNCPUN' and pa_producto = 'AHO'
+            end
+            
+            if @w_transaccion = '-'
+            begin
+                SELECT @w_nemonico = 'TDECTA'
+				SELECT @w_causa_ndnc = pa_char from cobis..cl_parametro where pa_nemonico = 'CNDPUN' and pa_producto = 'AHO'
+            end 
+                      
+            if @w_transaccion = '+'
+            begin
+                select @w_trn_org = 253
+                select @w_causa = codigo from cobis..cl_catalogo
+                where tabla in (select codigo from cobis..cl_tabla
+                               where tabla in ('ah_causa_nc'))
+                               and codigo = @w_causa_ndnc
+                               and estado = 'V'
+				if @@rowcount = 0            
+                begin            
+                    select @w_return  = 221087
+                    UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                    WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                    SELECT @w_numero = @w_numero + 1
+                    continue
+                end				
+            end
+            
+            if @w_transaccion = '-'
+            begin
+                select @w_trn_org = 264
+                select @w_causa = codigo from cobis..cl_catalogo
+                where tabla in (select codigo from cobis..cl_tabla
+                               where tabla in ('ah_causa_nd'))
+                               and codigo = @w_causa_ndnc
+                               and estado = 'V'
+			    if @@rowcount = 0            
+                begin            
+                    select @w_return  = 221087
+                    UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                    WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                    SELECT @w_numero = @w_numero + 1
+                    continue
+                end	
+            end
+            --GENERACION NOTA CREDITO / NOTA DEBITO			
+            exec @w_return = @w_rpc
+                 @s_ssn          = @w_ssn,
+                 @s_srv          = @s_srv,
+                 @s_ofi          = @s_ofi,
+                 @s_user         = @s_user,
+                 @s_term         = @s_term,
+                 @t_ssn_corr     = @w_ssn_corr, -- Sacar el valor del secuencial
+                 @t_trn          = @w_trn_org,
+                 @t_corr         = @t_corr,
+                 @i_corr         = @t_corr,
+                 @i_alt          = 1,
+                 @i_cta          = @w_cuenta,
+                 @i_val          = @w_valor,
+                 @i_cau          = @w_causa,
+                 @i_mon          = @i_mon,
+                 @i_fecha        = @s_date,
+                 @i_canal        = '8'
+            if @w_return <> 0
+            begin
+                ROLLBACK TRAN
+                UPDATE cob_remesas..re_detalle_papeleta_unica set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+                continue
+            end
+            
+            IF @t_corr <> 'S'
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'P',dp_mensaje='0 - PROCESADO',dp_secuencial=@w_ssn
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+            ELSE
+            BEGIN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'R',dp_mensaje='0 - REVERSADO'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+            END
+        END /* Fin procesado producto ahorros */
+        /* Inicio procesado pago de tarjeta credito  ejecutar sp cob_remesas pago tarjeta */
+        IF @w_producto = 11
+        begin			
+            select @w_mask=tc_tarj_mask 
+			from cob_canales..ca_tarjeta_credito
+			where tc_id_tarjeta = @w_cuenta					
+            exec @w_return = cob_remesas..sp_pago_tarjeta 
+                 @s_srv          = @s_srv,
+                 @s_ssn          = @s_ssn,
+                 @s_lsrv         = @s_lsrv,
+                 @s_ofi          = @s_ofi,
+                 @s_user         = @s_user,
+                 @s_rol          = @s_rol,
+                 @s_org          = @s_org,
+                 @t_trn          = @t_trn,
+                 @s_term         = @s_term,
+                 @s_date         = @s_date,
+                 @i_canal        = '8',
+                 -- campos pago tarjeta         
+                 @i_num_tarjeta  = @w_mask,
+                 @i_monto        = @w_valor,
+                 @i_operacion    = 'P'
+            if @w_return != 0
+            begin
+                ROLLBACK TRAN
+                UPDATE cob_remesas..re_detalle_papeleta_unica 
+				set dp_estado = 'E',dp_mensaje= convert(varchar,@w_return)+' - ERROR'
+                WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+                SELECT @w_numero = @w_numero + 1
+                continue
+            end
+            if @w_return = 0
+            begin
+                select @w_ofi_varchar = convert(varchar,@s_ofi)
+                exec XPCTSSRV...xp_cts_send
+                @t_spname = 'cob_procesador..sp_api_syscard_pago',
+                @t_trn = 955,
+                @s_user = @s_user,
+                @t_rol = @s_rol,
+                @i_tarjeta = @w_cuenta,
+                @i_origen = 'ATX',
+                @i_usuario = @s_user,
+                @i_term_id = @s_term,
+                @i_oficina = @w_ofi_varchar,
+                @i_efectivo = @w_valor,
+                @i_chq_propio = 0,
+                @i_chq_local = 0,
+                @i_chq_provincia = 0,
+                @i_chq_exterior = 0,
+                @i_moneda = '0',
+                @i_reverso = 'false',
+                @i_referencia = '',
+                @i_mensaje = '',
+                @i_metodo = 'Pago'
+            end
+
+            UPDATE cob_remesas..re_detalle_papeleta_unica 
+			set dp_estado = 'P',dp_mensaje='0 - PROCESADO',dp_secuencial=@w_ssn
+            WHERE dp_numero = @w_numero and dp_codigo_papeleta = @i_num_papeleta
+        end
+        
+        SELECT @w_numero = @w_numero + 1
+        select @o_cuenta_ti = pu_cta_trans_int, @o_tipo_cuenta_ti = (case pu_tipo_cta_trans_int
+            when '1'
+               then (select pb_descripcion
+                     from cob_remesas..pe_pro_bancario, cob_ahorros..ah_cuenta
+                     where ah_cta_banco = pu.pu_cta_trans_int and ah_prod_banc = pb_pro_bancario )
+            when '8'
+               then (select distinct pr_descripcion
+                     from cob_aportaciones..ap_producto, cob_aportaciones..ap_cuenta_producto
+                     where pr_numero = cc_producto and cc_cuenta = pu.pu_cta_trans_int and cc_concepto = 'CxC')
+            end)
+        from cob_remesas..re_papeleta_unica pu
+        where pu_codigo = @i_num_papeleta
+    END /* Fin ciclo while de procesado */
+
+    IF exists(SELECT 1 FROM cob_remesas..re_detalle_papeleta_unica WHERE dp_codigo_papeleta = @i_num_papeleta AND dp_estado = 'P' )
+         begin
+            UPDATE  cob_remesas..re_papeleta_unica SET pu_estado = 'P' WHERE pu_codigo = @i_num_papeleta
+         END
+         ELSE
+         BEGIN
+            UPDATE  cob_remesas..re_papeleta_unica SET pu_estado = 'E' WHERE pu_codigo = @i_num_papeleta
+         end
+
+    COMMIT TRAN
+END
+
+return 0
+go
+
+
+Y EL PAGO DE TARJETA
+
+create proc sp_pago_tarjeta (
+   @s_ssn          int,
+   @s_ssn_branch   int = null,
+   @s_srv          varchar(30),
+   @s_lsrv         varchar(30),
+   @s_user         varchar(30),
+   @s_sesn         int=null,
+   @s_term         varchar(10),
+   @s_date         datetime,
+   @s_ofi          tinyint,   /* Localidad origen transaccion */
+   @s_rol          smallint,
+   @s_org_err      char(1)   = null,   /* Origen de error: [A], [S] */
+   @s_error        int   = null,
+   @s_sev          tinyint   = null,
+   @s_msg          mensaje   = null,
+   @s_org          char(1),
+   @t_corr         char(1) = 'N',
+   @t_ssn_corr     int = null,   /* Trans a ser reversada */
+   @t_debug        char(1) = 'N',
+   @t_file         varchar(14) = null,
+   @t_from         varchar(32) = null,
+   @t_rty          char(1) = 'N',
+   @t_trn          smallint,
+   @i_canal        varchar(30) = null,
+   @i_filial         tinyint = 1,
+   --Datos de Tarjeta
+   @i_batch              char(1)        = 'N',-- Atomicidad desde un sp interfaz de teller
+   @i_efe                money = null,
+   @i_loc                money = null,
+   @i_prop               money = null,
+   @i_plaz               money = null,  
+   @i_mon                tinyint = 0,
+   @i_num_tarjeta        varchar(16)     = null, 
+   @i_cliente            int = null,
+   @i_caja               int = null,
+   @i_nombre             varchar(64)     = null,
+   @i_login_aut_reverso    varchar(30)    = NULL, -- Autorizacion de reverso
+   @i_motivo_reverso       catalogo       = null, -- Motivos de reveso
+   @i_obs_reverso          varchar(30)    = null, -- Obs. de reverso   
+   --Fin Datos papeleta unica
+   @i_operacion          char(1) = null,--P-(Procesar),V-(Validar)
+   @i_reproceso          char(1) = 'N',
+   --Campos servicio estados 
+   @o_ssn          int         = null out,
+   @o_fini         varchar(10) = null out,
+   @o_term         varchar(32) = null out,
+   @o_validado     char(1) = null out,
+   @o_valida_error char(1) = null out,
+   @o_nombre       varchar(32) = null out,
+   @o_fecha_efec   datetime= null out   
+)
+as
+declare   @w_return   int,
+   @w_rpc          varchar(60),
+   @w_sp_name      varchar(30),
+   @w_factor       int,
+   @w_estado       char(1),
+   @w_signo        char(1),
+   @w_causa        varchar(3),
+   @w_estado_reg   char(1),
+   @w_numero       int,
+   @w_valor        money,
+   @w_cuenta       varchar(24),
+   @w_cuenta_v     int,
+   @w_contador     int,
+   @w_producto     int,      
+   @w_par_causa    varchar(10),
+   @w_trn_org      smallint,
+   @w_ssn          int,
+   @w_ssn_corr     int,
+   @w_ssn_ing      int,
+   @w_ssn_pag      int,
+   @w_operacion    int,
+   @w_tarjeta      varchar(16),
+   @w_cliente      varchar(18),
+   @w_estado_cta   varchar(16),
+   @w_oficina_cta  tinyint,
+   @w_prod_banc    tinyint,
+   @w_ente         int,
+   @w_total        money   
+   
+/*  Captura nombre de Stored Procedure  */
+select   @w_sp_name = 'sp_pago_tarjeta',
+         @o_ssn     = @s_ssn,
+         @o_term    = @s_term
+
+select @w_oficina_cta = 12,
+       @w_prod_banc = 1
+
+/*  Modo de correccion  */
+if @t_corr = 'N'
+begin
+   select @w_factor = 1, @w_signo = 'C', @w_estado = 'N'
+end
+else
+begin
+   select @w_factor = -1, @w_signo = 'D', @w_estado = 'R'
+end
+
+/*  Validaciones  */ 
+select @w_estado_cta = tc_estado_tarjeta
+from cob_canales..ca_tarjeta_credito
+where tc_tarj_mask = @i_num_tarjeta
+if @@rowcount = 0
+begin
+    exec cobis..sp_cerror 
+        @t_debug = @t_debug, 
+        @t_file  = @t_file, 
+        @t_from  = @w_sp_name, 
+        @i_num     = 221095  -- NUMERO DE TARJETA NO EXISTE
+   return 221095 
+end
+ 
+if  @w_estado_cta = '100'
+BEGIN
+    exec cobis..sp_cerror 
+         @t_debug = @t_debug, 
+         @t_file  = @t_file, 
+         @t_from  = @w_sp_name, 
+         @i_num     = 221094  -- TARJETA EN ESTADO CANCELADO 
+    return 221094
+END
+
+IF @i_operacion = 'C' -- consulta
+BEGIN
+    select @o_nombre = tc_nom_tarjeta
+    from cob_canales..ca_tarjeta_credito
+    where tc_tarj_mask = @i_num_tarjeta
+    if @@rowcount = 0
+    BEGIN
+        exec cobis..sp_cerror 
+             @t_debug = @t_debug, 
+             @t_file  = @t_file, 
+             @t_from  = @w_sp_name, 
+             @i_num     = 2611004 
+        return 2611004 
+    END
+END
+
+IF @i_operacion = 'P'
+BEGIN
+
+	PRINT 'JCH EFE %1!',@i_efe
+	PRINT 'JCH PRO %1!',@i_prop
+	PRINT 'JCH LOC %1!',@i_loc
+    -- Control de nulos
+    select @i_efe  = isnull(@i_efe, 0),
+           @i_prop = isnull(@i_prop, 0),
+           @i_loc  = isnull(@i_loc, 0)
+           
+    select @w_total = @i_efe + @i_prop + @i_loc
+	PRINT 'JCH Total %1!',@w_total
+    
+    -- Control para que el valor ingresado sea mayor a 0
+    if @w_total <= 0
+    begin
+        exec cobis..sp_cerror
+             @t_debug  = @t_debug,
+             @t_file   = @t_file,
+             @t_from   = @w_sp_name,
+             @i_num    = 201097
+        return 201097   
+    end 
+    if @t_corr = 'N' or @t_corr = null
+    begin   
+        select @w_cliente = tc_cod_cliente,
+               @w_tarjeta = tc_id_tarjeta,
+			   @w_estado_cta = tc_estado_tarjeta
+        from cob_canales..ca_tarjeta_credito
+        where tc_tarj_mask = @i_num_tarjeta       
+        
+		if  @w_estado_cta <> '000'
+        BEGIN
+            exec cobis..sp_cerror 
+                 @t_debug = @t_debug, 
+                 @t_file  = @t_file, 
+                 @t_from  = @w_sp_name, 
+                 @i_num     = 221137  -- TARJETA NO ESTA EN ESTADO NORMAL
+            return 221137 
+        END
+	
+        INSERT INTO cob_remesas..re_pago_tarjeta_credito (pt_secuencial,pt_fecha,pt_num_tarjeta,pt_cliente,pt_oficina,pt_usuario,pt_canal,pt_caja,pt_terminal,pt_efectivo,pt_cheque_prop,pt_cheque_loc,pt_estado,pt_mensaje)
+        values(@s_ssn,@s_date,@w_tarjeta,@w_cliente,@s_ofi,@s_user,@i_canal,@i_caja,@s_term,isnull(@i_efe,0),isnull(@i_prop,0),isnull(@i_loc,0),'P',null)       
+        if @@error != 0             
+        BEGIN
+            exec cobis..sp_cerror 
+                @t_debug = @t_debug, 
+                @t_file    = @t_file, 
+                @t_from    = @w_sp_name, 
+                @i_num    = 2611005 
+            return 2611005 
+        END
+      
+        --Insertamos en la tabla para generar el archivo profecard
+        
+        SELECT @i_efe = isnull(@i_efe,0)
+        --Generacion del archivo profecard     
+        EXEC  @w_return  = cob_canales..sp_pagos_profecard
+            @t_trn           = 8307,
+            @s_ssn           = @s_ssn,
+            @s_ofi           = @s_ofi,
+            @s_user          = @s_user,
+            @s_date          = @s_date,
+            @i_operacion     = 'I',
+            @i_efe           = @i_efe,
+            @i_loc           = @i_loc,
+            @i_prop          = @i_prop,                                   
+            @i_id_tarjeta    = @i_num_tarjeta  
+        if @w_return <> 0 
+        begin
+           return @w_return
+        end
+        -- Transaccion monetaria Deposito S/L
+		select @w_ente = convert(int,@w_cliente)
+        
+		insert into cob_ahorros..ah_tran_servicio(ts_secuencial, ts_tipo_transaccion, ts_oficina, ts_usuario, ts_terminal,
+                                  ts_correccion, ts_ssn_corr, ts_reentry, ts_origen, ts_nodo, ts_tsfecha,
+                                  ts_tipo, ts_estado, ts_numero, ts_filial, ts_rol, ts_hora, ts_causa,
+                                  ts_autorizacion, ts_ced_ruc, ts_descripcion_ec, ts_tarjcred, ts_cta_banco, 
+                                  ts_valor, ts_saldo, ts_interes,  ts_moneda, ts_prod_banc, 
+                                  ts_oficina_cta, ts_monto, ts_contratado, ts_referencia,
+                                  ts_login_aut_reverso, ts_observacion, ts_motivo_reverso,
+                                  ts_cliente, ts_secuencia, ts_tipo_cliord, ts_cod_cliord)
+        values (@s_ssn, @t_trn,  @s_ofi, @s_user, @s_term,
+             @t_corr, @t_ssn_corr, @t_rty, 'L', @s_srv, @s_date,
+             null, @w_estado, null, 1, @s_rol, getdate(), null,
+             null, null, null, @i_num_tarjeta, null,
+             @i_efe, @i_prop, @i_loc, 0, 0, 
+             @s_ofi, @w_total, null, 'PAGO TARJETA TELLER', 
+             @i_login_aut_reverso, @i_obs_reverso, @i_motivo_reverso,
+             null, 0, 'S', @w_ente)
+        if @@error != 0
+        begin          
+            exec cobis..sp_cerror
+            @t_debug = @t_debug,
+            @t_file  = @t_file,
+            @t_from  = @w_sp_name,
+            @i_num   = 143005
+            return 143005
+        end 
+    end 
+    if @t_corr = 'S'
+    begin
+        if exists (select 1 from cob_remesas..re_pago_tarjeta_credito where pt_secuencial = @t_ssn_corr and pt_estado = 'P' and pt_fecha = @s_date )
+        begin
+           UPDATE  cob_remesas..re_pago_tarjeta_credito set pt_estado = 'R' where pt_secuencial = @t_ssn_corr and pt_estado = 'P' and pt_fecha = @s_date
+        end
+        else
+        begin
+           exec cobis..sp_cerror 
+                 @t_debug = @t_debug, 
+                 @t_file    = @t_file, 
+                 @t_from    = @w_sp_name, 
+                 @i_num    = 251067 
+             return 251067
+        end
+         -- Manejo de reverso de la transaccion
+        update cob_ahorros..ah_tran_servicio
+        set ts_estado            = @w_estado,
+            ts_observacion       = @i_obs_reverso,
+            ts_motivo_reverso    = @i_motivo_reverso,
+            ts_login_aut_reverso = @i_login_aut_reverso
+        where ts_secuencial  = @t_ssn_corr
+        and ts_tarjcred      = @i_num_tarjeta
+	    and ts_valor         = @i_efe  
+        and ts_saldo         = @i_prop	   
+        and ts_interes       = @i_loc    
+        and ts_usuario       = @s_user
+	    and ts_estado        = 'N'
+        if @@rowcount <> 1
+        begin
+            -- Datos del reverso no coinciden con el original      
+            exec cobis..sp_cerror
+                 @t_debug      = @t_debug,
+                 @t_file       = @t_file,
+                 @t_from       = @w_sp_name,
+                 @i_num        = 145005
+            return 145005
+           
+        end
+    end
+END
+
+return 0
+
+
+SALIDA
+
+output message -> <?xml version="1.0" encoding="ISO-8859-1" ?>
+<CTSMessage>
+	<CTSHeader>
+		<Field name="date"
+		       type="D">2025-08-25 00:00:00.0</Field>
+		<Field name="msgType"
+		       type="S">ProcedureRequest</Field>
+		<Field name="MULTIPLEXER_ORCHESTRATOR_FILTER"
+		       type="S">(service.callingSource=1)</Field>
+		<Field name="source"
+		       type="S">1</Field>
+		<Field name="backEndId"
+		       type="S">TENANT_COBIS</Field>
+		<Field name="t_corr"
+		       type="N">N</Field>
+		<Field name="tsn"
+		       type="N">256</Field>
+		<Field name="rol"
+		       type="N">215</Field>
+		<Field name="ssn"
+		       type="N">7184072</Field>
+		<Field name="sesn"
+		       type="N">0</Field>
+		<Field name="term"
+		       type="S">192.168.84</Field>
+		<Field name="isFormatterEnabled"
+		       type="S">false</Field>
+		<Field name="targetId"
+		       type="S">central</Field>
+		<Field name="org"
+		       type="C">U</Field>
+		<Field name="contextId"
+		       type="S">COBIS</Field>
+		<Field name="serviceName"
+		       type="S">cob_interface..sp_pago_p_unica_r</Field>
+		<Field name="ssn_branch"
+		       type="N">7184071</Field>
+		<Field name="target"
+		       type="S">SPExecutor</Field>
+		<Field name="trn"
+		       type="N">2744</Field>
+		<Field name="ofi"
+		       type="N">10</Field>
+		<Field name="srv"
+		       type="S">CTSDESASRV</Field>
+		<Field name="spType"
+		       type="S">Sybase</Field>
+		<Field name="lsrv"
+		       type="S">CTSDESASRV</Field>
+		<Field name="user"
+		       type="S">admuser</Field>
+		<Field name="HEADER_SUBMIT_RPC_FLOW"
+		       type="S">true</Field>
+	</CTSHeader>
+	<Data>
+		<ProcedureResponse>
+			<Message msgNo="0"
+			         type="0">JCH EFE </Message>
+			<Message msgNo="0"
+			         type="0">JCH PRO </Message>
+			<Message msgNo="0"
+			         type="0">JCH LOC </Message>
+			<Message msgNo="0"
+			         type="0">JCH Total 0.00</Message>
+			<Message msgNo="201097"
+			         type="0">[sp_pago_tarjeta]  VALOR DEBE SER MAYOR A CERO</Message>
+			<ResultSet>
+				<Header>
+					<col name="r_results_submit_rpc"
+					     type="39"
+					     len="18"/>
+					<col name="r_sldcaja"
+					     type="60"
+					     len="21"/>
+					<col name="r_idcierre"
+					     type="56"
+					     len="11"/>
+					<col name="r_ssn_host"
+					     type="56"
+					     len="11"/>
+					<col name="r_slddisp"
+					     type="60"
+					     len="21"/>
+					<col name="r_ruc_filial"
+					     type="39"
+					     len="13"/>
+					<col name="r_direc_filial"
+					     type="39"
+					     len="64"/>
+					<col name="r_nombre_filial"
+					     type="39"
+					     len="54"/>
+					<col name="r_ssn"
+					     type="56"
+					     len="11"/>
+					<col name="r_fini"
+					     type="39"
+					     len="10"/>
+					<col name="r_term"
+					     type="39"
+					     len="32"/>
+					<col name="r_ofi_nombre"
+					     type="39"
+					     len="32"/>
+					<col name="r_ofi_ciudad"
+					     type="39"
+					     len="32"/>
+				</Header>
+				<rw>
+					<cd>results_submit_rpc</cd>
+					<cd>543778.1700</cd>
+					<cd>1</cd>
+					<cd>7184072</cd>
+					<cd>null</cd>
+					<cd>2-220-270 D.V</cd>
+					<cd>CALLE JORGE ZARAK, ENTRE VÍA ESPAÑA Y AVE. FERNÁNDEZ DE CÓRDOBA</cd>
+					<cd>COOPERATIVA PROFESIONALES R.L.</cd>
+					<cd>7184072</cd>
+					<cd>null</cd>
+					<cd>192.168.84</cd>
+					<cd>null</cd>
+					<cd>null</cd>
+				</rw>
+			</ResultSet>
+			<OutputParams/>
+			<return>0</return>
+		</ProcedureResponse>
+	</Data>
+</CTSMessage>
+
+
+
